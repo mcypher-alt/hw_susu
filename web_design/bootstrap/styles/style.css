@@ -1,0 +1,107 @@
+:root {
+  --font-base: 'Onest', sans-serif;
+  --font-heading: 'Unbounded', sans-serif;
+  --color-accent: #10b981;
+  --color-accent-hover: #198754;
+  --bg-deep: #020816;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-base);
+  background-color: var(--bg-deep);
+  color: #f1f5f9;
+  overflow-x: hidden;
+}
+
+h1, h2, h3, h4, .navbar-brand {
+  font-family: var(--font-heading);
+  letter-spacing: -0.03em;
+}
+
+.hero-title {
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.hero-desc {
+  max-width: 600px;
+}
+
+.text-accent {
+  color: var(--color-accent) !important;
+}
+
+.bg-slate-950 { background-color: #020617 !important; }
+.bg-slate-900 { background-color: #0f172a !important; }
+.bg-slate-800 { background-color: #1e293b !important; }
+
+.bg-slate-950-80 {
+  background-color: rgba(2, 6, 23, 0.8) !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.bg-slate-900-50 {
+  background-color: rgba(15, 23, 42, 0.5) !important;
+}
+
+.border-slate-800 {
+  border-color: rgba(30, 41, 59, 0.8) !important;
+}
+
+.review-cover {
+  width: 100%;
+  height: 250px;
+  object-fit: cover;
+}
+
+.review-avatar-split {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid;
+}
+
+.form-control:focus,
+.form-select:focus {
+  background-color: #212529;
+  color: #f1f5f9;
+  border-color: var(--color-accent-hover);
+  box-shadow: 0 0 0 0.25rem rgba(25, 135, 84, 0.25);
+}
+
+.custom-card {
+  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.custom-card:hover {
+  transform: translateY(-8px);
+  border-color: var(--color-accent-hover) !important;
+  box-shadow: 0 10px 25px rgba(25, 135, 84, 0.2);
+}
+
+.custom-btn {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.custom-btn:hover {
+  transform: scale(1.04);
+  box-shadow: 0 0 15px rgba(25, 135, 84, 0.5);
+}
+
+.modal-backdrop.show {
+  opacity: 0.75;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  background-color: #020617;
+}
+
+.modal-content select option {
+  background-color: #0f172a;
+  color: #f1f5f9;
+}

@@ -1,0 +1,5 @@
+@import "tailwindcss";
+@theme {
+  --font-sans: 'Onest', sans-serif;
+  --font-heading: 'Unbounded', sans-serif;
+}
