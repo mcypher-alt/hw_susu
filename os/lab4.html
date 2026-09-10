@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Лабораторная №4: Модель Читатели-Писатели (JS / Thread)</title>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --panel-bg: #1e293b;
+            --border: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --writer-color: #f87171;
+            --reader-color: #60a5fa;
+            --accent-green: #10b981;
+            --accent-amber: #f59e0b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background-color: var(--bg-dark); color: var(--text-main); padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+        header { text-align: center; margin-bottom: 6px; }
+        h1 { font-size: 22px; }
+        p.subtitle { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+
+        .panel { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+        .panel-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 12px; }
+
+        /* Буфер из 10 ячеек */
+        .buffer-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 8px; }
+        .slot-card { background: #334155; border: 2px solid transparent; border-radius: 6px; padding: 8px; min-height: 85px; display: flex; flex-direction: column; justify-content: space-between; transition: 0.2s; text-align: center; }
+        .slot-index { font-size: 10px; font-weight: bold; color: var(--text-muted); }
+        .slot-val { font-size: 18px; font-weight: bold; color: #fff; }
+        .slot-status { font-size: 9px; font-weight: 600; }
+
+        .state-idle { border-color: var(--border); background: #334155; }
+        .state-write { border-color: var(--writer-color); background: #7f1d1d; } /* Красный = запись */
+        .state-read { border-color: var(--reader-color); background: #1e3a8a; }  /* Синий = чтение */
+
+        /* Сетка потоков */
+        .threads-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .thread-card { background: #0f172a; border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
+        .thread-header { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: bold; }
+        .thread-controls { display: flex; gap: 6px; align-items: center; }
+
+        button { cursor: pointer; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11px; font-weight: 700; transition: 0.2s; }
+        .btn-start { background: var(--accent-green); color: #fff; }
+        .btn-pause { background: var(--accent-amber); color: #000; }
+        .btn-stop { background: #ef4444; color: #fff; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .speed-control { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+        input[type=range] { flex-grow: 1; accent-color: #38bdf8; cursor: pointer; }
+
+        /* Лог */
+        .log-box { background: #090d16; border: 1px solid var(--border); border-radius: 6px; height: 130px; overflow-y: auto; padding: 8px; font-family: monospace; font-size: 11px; color: #cbd5e1; }
+        .log-entry { margin-bottom: 2px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Модель «Читатель-Писатель» с буфером длины 10</h1>
+        <p class="subtitle">Реализация на JavaScript с использованием абстракции класса Thread и независимым управлением</p>
+    </header>
+
+    <!-- Визуализация буфера -->
+    <div class="panel">
+        <div class="panel-title">Содержимое буфера (10 ячеек)</div>
+        <div class="buffer-grid" id="buffer-container"></div>
+    </div>
+
+    <!-- Управление потоками -->
+    <div class="threads-layout">
+        <!-- Писатели -->
+        <div class="panel">
+            <div class="panel-title" style="color: var(--writer-color);">Писатели (Монопольный доступ)</div>
+            <div id="writers-container"></div>
+        </div>
+
+        <!-- Читатели -->
+        <div class="panel">
+            <div class="panel-title" style="color: var(--reader-color);">Читатели (Разделяемый доступ)</div>
+            <div id="readers-container"></div>
+        </div>
+    </div>
+
+    <!-- Лог -->
+    <div class="panel">
+        <div class="panel-title">Журнал синхронизации и событий</div>
+        <div class="log-box" id="log-box"></div>
+    </div>
+</div>
+
+<script>
+    // --- 1. ПРИМИТИВ СИНХРОНИЗАЦИИ ЯЧЕЙКИ БУФЕРА (RW-LOCK) ---
+    class BufferSlot {
+        constructor(index) {
+            this.index = index;
+            this.value = null;
+            this.activeReaders = 0;
+            this.isWriting = false;
+            this.currentWriter = null;
+            this.readersList = new Set();
+            this.waitQueue = [];
+        }
+
+        // Ожидание освобождения ресурса
+        async acquireLock(type, actorName) {
+            return new Promise((resolve) => {
+                const tryAcquire = () => {
+                    if (type === 'READ') {
+                        // Читатель может читать, только если нет записи и ячейка не пуста
+                        if (!this.isWriting && this.value !== null) {
+                            this.activeReaders++;
+                            this.readersList.add(actorName);
+                            resolve();
+                            return;
+                        }
+                    } else if (type === 'WRITE') {
+                        // Писатель требует абсолютной монополии
+                        if (!this.isWriting && this.activeReaders === 0) {
+                            this.isWriting = true;
+                            this.currentWriter = actorName;
+                            resolve();
+                            return;
+                        }
+                    }
+                    this.waitQueue.push(tryAcquire);
+                };
+                tryAcquire();
+            });
+        }
+
+        releaseLock(type, actorName) {
+            if (type === 'READ') {
+                this.activeReaders--;
+                this.readersList.delete(actorName);
+            } else if (type === 'WRITE') {
+                this.isWriting = false;
+                this.currentWriter = null;
+            }
+
+            // Оповещаем ждущие задачи
+            const queue = [...this.waitQueue];
+            this.waitQueue = [];
+            queue.forEach(resume => resume());
+        }
+    }
+
+    // --- 2. СТАНДАРТНЫЙ КЛАСС THREAD (Управление жизненным циклом) ---
+    class Thread {
+        constructor(name) {
+            this.name = name;
+            this.isRunning = false;
+            this.isPaused = false;
+            this.delay = 1000; // мс
+            this._pausePromiseResolver = null;
+        }
+
+        start() {
+            if (this.isRunning) return;
+            this.isRunning = true;
+            this.isPaused = false;
+            this.run();
+        }
+
+        pause() {
+            if (!this.isRunning || this.isPaused) return;
+            this.isPaused = true;
+        }
+
+        resume() {
+            if (!this.isRunning || !this.isPaused) return;
+            this.isPaused = false;
+            if (this._pausePromiseResolver) {
+                this._pausePromiseResolver();
+                this._pausePromiseResolver = null;
+            }
+        }
+
+        stop() {
+            this.isRunning = false;
+            this.isPaused = false;
+            if (this._pausePromiseResolver) {
+                this._pausePromiseResolver();
+                this._pausePromiseResolver = null;
+            }
+        }
+
+        setSpeed(delayMs) {
+            this.delay = Math.max(200, delayMs);
+        }
+
+        // Проверка флага паузы внутри цикла
+        async checkPause() {
+            if (this.isPaused) {
+                await new Promise(resolve => { this._pausePromiseResolver = resolve; });
+            }
+        }
+
+        // Метод для переопределения в потомках
+        async run() {
+            throw new Error("Метод run() должен быть реализован");
+        }
+    }
+
+    // --- 3. НИТЬ ПИСАТЕЛЯ ---
+    class WriterThread extends Thread {
+        constructor(name, buffer, ui) {
+            super(name);
+            this.buffer = buffer;
+            this.ui = ui;
+        }
+
+        async run() {
+            this.ui.updateStatus(this.name, 'Работает', 'badge-run');
+            while (this.isRunning) {
+                await this.checkPause();
+                if (!this.isRunning) break;
+
+                const slotIdx = Math.floor(Math.random() * this.buffer.length);
+                const slot = this.buffer[slotIdx];
+
+                addLog(`⏳ ${this.name} ожидает монопольного доступа к [${slotIdx}]`);
+                await slot.acquireLock('WRITE', this.name);
+
+                // Критическая секция записи
+                const newVal = Math.floor(Math.random() * 90 + 10);
+                this.ui.renderSlot(slotIdx, 'WRITE', this.name, newVal);
+                addLog(`✍️ ${this.name} ЗАПИСАЛ ${newVal} в [${slotIdx}]`);
+                await new Promise(r => setTimeout(r, this.delay));
+
+                slot.value = newVal;
+                slot.releaseLock('WRITE', this.name);
+                this.ui.renderSlot(slotIdx, 'IDLE', null, slot.value);
+                addLog(`✅ ${this.name} освободил ячейку [${slotIdx}]`);
+
+                await new Promise(r => setTimeout(r, this.delay * 0.8));
+            }
+            this.ui.updateStatus(this.name, 'Остановлен', 'badge-stop');
+        }
+    }
+
+    // --- 4. НИТЬ ЧИТАТЕЛЯ ---
+    class ReaderThread extends Thread {
+        constructor(name, buffer, ui) {
+            super(name);
+            this.buffer = buffer;
+            this.ui = ui;
+        }
+
+        async run() {
+            this.ui.updateStatus(this.name, 'Работает', 'badge-run');
+            while (this.isRunning) {
+                await this.checkPause();
+                if (!this.isRunning) break;
+
+                const slotIdx = Math.floor(Math.random() * this.buffer.length);
+                const slot = this.buffer[slotIdx];
+
+                addLog(`🔍 ${this.name} ожидает чтения [${slotIdx}]`);
+                await slot.acquireLock('READ', this.name);
+
+                // Критическая секция совместного чтения
+                this.ui.renderSlot(slotIdx, 'READ', Array.from(slot.readersList), slot.value);
+                addLog(`📖 ${this.name} ЧИТАЕТ ${slot.value} из [${slotIdx}]`);
+                await new Promise(r => setTimeout(r, this.delay));
+
+                slot.releaseLock('READ', this.name);
+                this.ui.renderSlot(slotIdx, 'IDLE', null, slot.value);
+                addLog(`👓 ${this.name} закончил чтение [${slotIdx}]`);
+
+                await new Promise(r => setTimeout(r, this.delay * 0.8));
+            }
+            this.ui.updateStatus(this.name, 'Остановлен', 'badge-stop');
+        }
+    }
+
+    // --- 5. УПРАВЛЕНИЕ UI ---
+    const buffer = Array.from({ length: 10 }, (_, i) => new BufferSlot(i));
+    const threads = {};
+
+    function addLog(msg) {
+        const box = document.getElementById('log-box');
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        entry.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        box.appendChild(entry);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    const UI = {
+        renderSlot(idx, state, actor, val) {
+            const el = document.getElementById(`slot-${idx}`);
+            const valEl = el.querySelector('.slot-val');
+            const statEl = el.querySelector('.slot-status');
+
+            el.className = 'slot-card';
+            if (state === 'WRITE') {
+                el.classList.add('state-write');
+                valEl.innerText = val;
+                statEl.innerText = `Запись: ${actor}`;
+            } else if (state === 'READ') {
+                el.classList.add('state-read');
+                valEl.innerText = val;
+                statEl.innerText = `Читают: ${actor.length}`;
+            } else {
+                el.classList.add('state-idle');
+                valEl.innerText = val !== null ? val : 'EMPTY';
+                statEl.innerText = 'Свободно';
+            }
+        },
+        updateStatus(name, text) {
+            const statusEl = document.getElementById(`status-${name}`);
+            if (statusEl) statusEl.innerText = text;
+        }
+    };
+
+    // Инициализация HTML буфера
+    const bufContainer = document.getElementById('buffer-container');
+    for (let i = 0; i < 10; i++) {
+        bufContainer.innerHTML += `
+            <div class="slot-card state-idle" id="slot-${i}">
+                <div class="slot-index">[${i}]</div>
+                <div class="slot-val">EMPTY</div>
+                <div class="slot-status">Свободно</div>
+            </div>
+        `;
+    }
+
+    // Генерация элементов управления потоком
+    function createThreadUI(containerId, name, isWriter) {
+        const container = document.getElementById(containerId);
+        container.innerHTML += `
+            <div class="thread-card">
+                <div class="thread-header">
+                    <span style="color: ${isWriter ? 'var(--writer-color)' : 'var(--reader-color)'}">${name}</span>
+                    <span id="status-${name}" style="color: var(--text-muted); font-size: 11px;">Остановлен</span>
+                </div>
+                <div class="thread-controls">
+                    <button class="btn-start" onclick="startThread('${name}')">Старт</button>
+                    <button class="btn-pause" id="pause-btn-${name}" onclick="togglePause('${name}')">Пауза</button>
+                    <button class="btn-stop" onclick="stopThread('${name}')">Стоп</button>
+                </div>
+                <div class="speed-control">
+                    <span>Задержка:</span>
+                    <input type="range" min="300" max="3000" step="100" value="1000" oninput="changeSpeed('${name}', this.value)">
+                    <span id="spd-val-${name}">1.0s</span>
+                </div>
+            </div>
+        `;
+    }
+
+    // Инициализация
+    ['Писатель 1', 'Писатель 2'].forEach(name => {
+        createThreadUI('writers-container', name, true);
+        threads[name] = new WriterThread(name, buffer, UI);
+    });
+
+    ['Читатель 1', 'Читатель 2', 'Читатель 3'].forEach(name => {
+        createThreadUI('readers-container', name, false);
+        threads[name] = new ReaderThread(name, buffer, UI);
+    });
+
+    // Обработчики кнопок
+    window.startThread = (name) => threads[name].start();
+    window.stopThread = (name) => threads[name].stop();
+    window.togglePause = (name) => {
+        const t = threads[name];
+        const btn = document.getElementById(`pause-btn-${name}`);
+        if (!t.isRunning) return;
+        if (t.isPaused) {
+            t.resume();
+            btn.innerText = 'Пауза';
+            UI.updateStatus(name, 'Работает');
+        } else {
+            t.pause();
+            btn.innerText = 'Возобновить';
+            UI.updateStatus(name, 'Пауза');
+        }
+    };
+    window.changeSpeed = (name, val) => {
+        threads[name].setSpeed(Number(val));
+        document.getElementById(`spd-val-${name}`).innerText = (val / 1000).toFixed(1) + 's';
+    };
+</script>
+</body>
+</html>
